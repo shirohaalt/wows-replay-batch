@@ -133,7 +133,7 @@ class WorkflowTests(unittest.TestCase):
         moved = self.root / "移动后的回放"
         shutil.copytree(self.library, moved)
         runner = Runner.from_manifest(moved / "replays", Options(team="Other", output="ignored"), root=self.root)
-        self.assertEqual(runner.output, moved)
+        self.assertEqual(runner.output, moved.resolve())
         self.assertEqual(runner.options.team, "DEMO")
         self.assertEqual(runner.tournament.url, self.runner.tournament.url)
 

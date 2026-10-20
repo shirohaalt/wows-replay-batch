@@ -68,7 +68,7 @@ class FuzzySearchTests(unittest.TestCase):
             runner.search()
             self.assertEqual(runner.options.team, "-SAMPLE-")
             self.assertEqual(runner.output.name, "-SAMPLE-")
-            self.assertEqual(runner.output.parent, Path(d) / "king-of-the-sea-xix/apac")
+            self.assertEqual(runner.output.parent, (Path(d) / "king-of-the-sea-xix/apac").resolve())
 
 
 if __name__ == "__main__":
