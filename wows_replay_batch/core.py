@@ -642,6 +642,12 @@ class Runner:
             f.write(line + "\n")
         self.emit("log", line)
 
+    def replay_path(self, job):
+        return self.output / job["replay"]
+
+    def load_manifest(self):
+        return load_library(self.output)
+
     def search(self):
         matches = self.client.search(self.options.team)
         resolved = getattr(self.client, "resolved_team", self.options.team)
@@ -796,7 +802,7 @@ class Runner:
     def convert(self, report_ids=None):
         """Convert an existing local library without querying the tournament or downloading REP."""
         self.emit("phase", "convert")
-        manifest_path, manifest = load_library(self.output)
+        manifest_path, manifest = self.load_manifest()
         selected = None if report_ids is None else {str(key) for key in report_ids}
         jobs = [j for j in manifest["jobs"] if selected is None or str(j["report_id"]) in selected]
         if not jobs:
@@ -811,12 +817,14 @@ class Runner:
             old = job.copy()
             try:
                 self.net.check()
-                replay = self.output / job["replay"]
+                replay = self.replay_path(job)
                 if not replay.is_file():
-                    raise AppError(f"本地回放不存在，请返回下载页补充下载：{replay.name}")
+                    hint = "重新读取本地文件夹" if getattr(self, "is_local", False) else "返回下载页补充下载"
+                    raise AppError(f"本地回放不存在，请{hint}：{replay.name}")
                 meta, digest = replay_meta(replay), sha256(replay)
                 if old.get("replay_sha256") and old["replay_sha256"] != digest:
-                    raise AppError(f"回放校验失败，请返回下载页重新下载：{replay.name}")
+                    hint = "重新读取本地文件夹" if getattr(self, "is_local", False) else "返回下载页重新下载"
+                    raise AppError(f"回放校验失败，请{hint}：{replay.name}")
                 job.update(replay_sha256=digest, game_version=meta["clientVersionFromExe"])
                 job.pop("error", None)
                 from .video import fingerprint as render_fingerprint
@@ -851,7 +859,7 @@ class Runner:
 
     def render_job(self, job, old, tools, index, total):
         from .video import compose_video, fingerprint as render_fingerprint
-        replay, video = self.output / job["replay"], self.output / job["video"]
+        replay, video = self.replay_path(job), self.output / job["video"]
         fingerprint, mode, selected_ids = render_fingerprint(self.options, job)
         legacy_fingerprint = hashlib.sha256(json.dumps({"toolkit": TOOL_VERSION, "assets": CACHE_REVISION,
                             "trails": self.options.trails, "codec": "h264"}, sort_keys=True).encode()).hexdigest()
@@ -892,7 +900,8 @@ class Runner:
         if self.options.show_bans or mode == "selected":
             if mode == "selected" and data is None:
                 data = tools.game_data(replay)
-            self.log(f"[{index}/{total}] 合成 BAN 信息与舰船轨迹（模式：{mode}）。")
+            content = "BAN 信息与舰船轨迹" if self.options.show_bans else "指定舰船轨迹"
+            self.log(f"[{index}/{total}] 合成{content}（模式：{mode}）。")
             compose_video(self, base, temp_video, job, data, mode, selected_ids)
             recipe = temp_video.with_suffix(".render.json")
             if recipe.exists():

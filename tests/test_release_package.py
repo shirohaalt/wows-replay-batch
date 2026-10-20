@@ -14,7 +14,8 @@ class ReleasePrivacyTests(unittest.TestCase):
                      "cache/game-data/common/ab/" + "c" * 18, "cache/game-data/15.9.0_123/.ready.json",
                      "settings.json", "results/team/manifest.json", "results/team/replays/a.wowsreplay",
                      "screenshots/download.png", "run.log", "cache/replay-info/private.json", "cache/base-videos/a.mp4",
-                     "cache/game-data/settings.json", "cache/game-data/15.9.0_123/history.json", "tools/ffmpeg/user.log"]
+                     "cache/game-data/settings.json", "cache/game-data/15.9.0_123/history.json", "tools/ffmpeg/user.log",
+                     "WoWSReplayBatch-output/manifest.json", "WoWSReplayBatch-output/videos/private.mp4"]
             for name in names:
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)

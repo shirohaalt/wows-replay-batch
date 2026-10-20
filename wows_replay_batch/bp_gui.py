@@ -248,9 +248,9 @@ class TrailWindow(tk.Toplevel):
         self.loading = False
         self.status = tk.StringVar(value="选择一份已下载回放，再勾选需要显示轨迹的舰船。")
         try:
-            manifest = json.loads((self.runner.output / "manifest.json").read_text("utf-8"))
-            self.jobs = [j for j in manifest["jobs"] if (self.runner.output / j["replay"]).is_file()]
-        except (OSError, ValueError, KeyError):
+            manifest = self.runner.load_manifest()[1]
+            self.jobs = [j for j in manifest["jobs"] if self.runner.replay_path(j).is_file()]
+        except (OSError, ValueError, KeyError, AppError):
             pass
         tk.Label(self, text="指定舰船轨迹", bg=BG, fg=TEXT, font=("Microsoft YaHei UI", 19, "bold")).pack(anchor="w", padx=22, pady=(18, 8))
         tk.Label(self, text="只改变轨迹线；其他舰船图标照常保留。同型舰按玩家分别勾选。", bg=BG, fg=MUTED).pack(anchor="w", padx=22)
@@ -270,6 +270,8 @@ class TrailWindow(tk.Toplevel):
         self.job_by_id = {str(job["report_id"]): job for job in self.jobs}
         for index, job in enumerate(self.jobs):
             label = f"{' vs '.join(job['opponents'])}   G{job['game_number']}\n{job['map']}  ·  {job['team']} 视角"
+            if job.get("local_file"):
+                label = f"{Path(job['replay']).name}\n{job['map']}  ·  {job['team']}"
             self.list.insert("", "end", iid=str(job["report_id"]), values=(label,),
                              tags=("alternate",) if index % 2 else ())
         self.list.bind("<<TreeviewSelect>>", self.choose)
@@ -300,8 +302,9 @@ class TrailWindow(tk.Toplevel):
         self.save_button = ttk.Button(footer, text="保存选择", command=self.save, style="Accent.TButton")
         self.save_button.pack(side="right")
         if not self.jobs:
-            self.status.set("尚无已下载回放。请先下载回放，再读取舰船名单。")
-            ttk.Button(self.grid_frame, text="先下载队伍回放", command=self.download_first).pack(pady=40)
+            local = getattr(self.runner, "is_local", False)
+            self.status.set("没有可读取的本地回放，请重新读取文件夹。" if local else "尚无已下载回放。请先下载回放，再读取舰船名单。")
+            ttk.Button(self.grid_frame, text="重新读取文件夹" if local else "先下载队伍回放", command=self.download_first).pack(pady=40)
             self.save_button.configure(state="disabled")
         else:
             self.choose_id = self.after(150, lambda: self.list.selection_set(str(self.jobs[0]["report_id"]))
@@ -334,7 +337,7 @@ class TrailWindow(tk.Toplevel):
         def work():
             from .video import read_roster
             try:
-                roster = read_roster(self.runner, self.runner.output / job["replay"])
+                roster = read_roster(self.runner, self.runner.replay_path(job))
                 self.events.put((generation, roster, ""))
             except Exception as e:
                 self.events.put((generation, [], str(e)))
@@ -394,7 +397,10 @@ class TrailWindow(tk.Toplevel):
 
     def download_first(self):
         self.close()
-        self.owner.notebook.select(self.owner.download_page)
+        if getattr(self.runner, "is_local", False):
+            self.owner.scan_folder()
+        else:
+            self.owner.notebook.select(self.owner.download_page)
 
     def close(self):
         self.runner.cancel.set()

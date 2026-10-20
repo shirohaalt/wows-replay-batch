@@ -14,6 +14,7 @@ settings.json
 *.spec
 outputs/
 updates/
+WoWSReplayBatch-output/
 .env
 *.key
 *.pem

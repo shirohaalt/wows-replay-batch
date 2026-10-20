@@ -13,6 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 from . import __version__
 from .core import AppError, Cancelled, Options, Runner, app_home, load_library, write_json
 from .updates import DEFAULT_REPOSITORY
+from .regions import REGIONS, region_for_url
 from .ui_theme import ACCENT, BG, FIELD, MUTED, PANEL, TEXT, configure_controls, configure_stripes, stripe_rows
 STATUS = {"pending": "等待", "downloading": "下载中", "downloaded": "已下载", "converting": "转换中",
           "completed": "已完成", "skipped": "已完成 · 跳过", "failed": "失败 · 可重试", "cancelled": "已停止"}
@@ -47,6 +48,9 @@ class Application(tk.Tk):
         if not isinstance(self.trail_selections, dict):
             self.trail_selections = {}
         self.vars = {k: (tk.BooleanVar(value=v) if isinstance(v, bool) else tk.StringVar(value=v)) for k, v in defaults.items()}
+        self.region = tk.StringVar(value=region_for_url(self.vars["url"].get()))
+        self.vars["url"].set(REGIONS[self.region.get()])
+        self.region.trace_add("write", lambda *_: self.vars["url"].set(REGIONS[self.region.get()]))
         self.source = tk.StringVar(value=saved.get("conversion_source", ""))
         self.filter_text = tk.StringVar()
         self.perspective = tk.StringVar(value="全部已下载视角")
@@ -66,6 +70,7 @@ class Application(tk.Tk):
         self.library_path = None
         self.library_team = ""
         self.inputs = []
+        self.saved_local_settings = saved
         self._style()
         style = ttk.Style(self)
         configure_controls(self)
@@ -109,6 +114,11 @@ class Application(tk.Tk):
         self.notebook.add(self.convert_page, text="02   转换视频")
         self._download_page()
         self._convert_page()
+        from .local_gui import LocalPage
+        self.local_page = LocalPage(self, self.saved_local_settings)
+        self.notebook.add(self.local_page, text="03   本地回放转换")
+        self.notebook.bind("<<NotebookTabChanged>>", self.page_changed)
+        self.saved_local_settings = None
         footer = tk.Frame(outer, bg=BG)
         footer.pack(fill="x", pady=(10, 6))
         self.label(footer, textvariable=self.state_text, color=ACCENT, bold=True).pack(side="left")
@@ -127,7 +137,12 @@ class Application(tk.Tk):
         form = tk.Frame(page, bg=PANEL, padx=18, pady=10)
         form.grid(row=0, column=0, sticky="ew", pady=(12, 0))
         form.columnconfigure(1, weight=1)
-        for r, title, key in ((0, "赛事比赛页", "url"), (1, "队伍关键词 / 队标", "team"), (2, "REP 保存位置", "output")):
+        self.label(form, "赛事服务器", color=MUTED).grid(row=0, column=0, sticky="w", padx=(0, 16), pady=5)
+        self.region_choice = ttk.Combobox(form, textvariable=self.region, values=tuple(REGIONS), state="readonly")
+        self.region_choice.grid(row=0, column=1, sticky="ew", pady=4)
+        self.inputs.append(self.region_choice)
+        self.label(form, "King of the Sea XIX", color=MUTED, size=9).grid(row=0, column=2, padx=(12, 0), sticky="w")
+        for r, title, key in ((1, "队伍关键词 / 队标", "team"), (2, "REP 保存位置", "output")):
             self.label(form, title, color=MUTED).grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
             entry = ttk.Entry(form, textvariable=self.vars[key])
             entry.grid(row=r, column=1, sticky="ew", pady=4)
@@ -248,7 +263,7 @@ class Application(tk.Tk):
 
     def save_settings(self):
         write_json(self.root_dir / "settings.json", {**asdict(self.get_options()), "conversion_source": self.source.get(),
-                                                    "update_repository": self.update_repository})
+                                                    "update_repository": self.update_repository, **self.local_page.settings()})
 
     def choose_manifest(self):
         path = filedialog.askopenfilename(title="选择已下载的回放清单", initialdir=str(self.library_path.parent if self.library_path else self.last_output),
@@ -301,6 +316,10 @@ class Application(tk.Tk):
         if self.runner and self.active_phase == "download" and (self.runner.output / "manifest.json").exists():
             self.source.set(str(self.runner.output / "manifest.json"))
             self.load_conversion()
+
+    def page_changed(self, _event=None):
+        if not (self.worker and self.worker.is_alive()) and self.notebook.select() == str(self.local_page):
+            self.detail_text.set("本地转换：选择文件夹并读取回放，再设置舰船轨迹。无需查询比赛网站。")
 
     def visible_jobs(self):
         query = self.filter_text.get().strip().casefold()
@@ -383,6 +402,7 @@ class Application(tk.Tk):
             widget.configure(state="disabled" if active else "readonly" if isinstance(widget, ttk.Combobox) else "normal")
         self.stop_button.configure(state="normal" if active else "disabled")
         self.update_download_actions(active)
+        self.local_page.busy(active)
 
     def launch(self, operation):
         self.save_settings()
@@ -580,6 +600,9 @@ class Application(tk.Tk):
 
     def open_output(self):
         try:
+            if self.notebook.select() == str(self.local_page):
+                self.local_page.open_output()
+                return
             path = self.library_path.parent if self.notebook.select() == str(self.convert_page) and self.library_path else self.last_output
             path.mkdir(parents=True, exist_ok=True)
             os.startfile(str(path))
@@ -658,6 +681,8 @@ class Application(tk.Tk):
                 break
             if kind == "phase":
                 self.active_phase = data
+            elif kind == "local_event":
+                self.local_page.receive_event(*data)
             elif kind == "log":
                 self.add_log(data)
             elif kind == "team_candidates":
@@ -714,6 +739,8 @@ class Application(tk.Tk):
                     self.load_conversion(silent=True)
             elif kind == "error":
                 self.state_text.set("任务未完成，可重试")
+                if self.active_phase.startswith("local_"):
+                    self.local_page.detail.set(data)
                 self.add_log(data)
                 messagebox.showerror("任务未完成", data, parent=self)
             elif kind == "idle":

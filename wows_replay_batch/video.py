@@ -246,11 +246,11 @@ def compose_video(runner, base, output, job, data, mode, selected_ids):
         raise AppError(f"当前视频合成需要标准 768×800 小地图，实际为 {width}×{height}。")
     roster, track_data = [], None
     if mode == "selected" and selected_ids:
-        roster = read_roster(runner, runner.output / job["replay"], data)
+        roster = read_roster(runner, runner.replay_path(job), data)
         roster = [r for r in roster if int(r["entity_id"]) in selected_ids]
         if len(roster) != len(selected_ids):
             raise AppError("所选舰船不属于此回放，请重新打开「选择舰船」检查名单。")
-        track_data = replay_tracks(runner, runner.output / job["replay"], data)
+        track_data = replay_tracks(runner, runner.replay_path(job), data)
     panel = footer_panel(width, job.get("draft"), runner.options.show_bans, roster, mode)
     output.parent.mkdir(parents=True, exist_ok=True)
     trail_image = Image.new("RGBA", (width, height))
@@ -324,7 +324,7 @@ def compose_video(runner, base, output, job, data, mode, selected_ids):
                         except OSError:
                             pass
     write_json(output.with_suffix(".render.json"), {"mode": mode, "selected_ids": sorted(selected_ids),
-               "selected_ships": roster, "draft": job.get("draft"), "frames": frames,
+               "selected_ships": roster, "draft": job.get("draft"), "show_bans": runner.options.show_bans, "frames": frames,
                "width": width, "height": height + panel.height, "tracks": list(cursor), "version": COMPOSITOR_VERSION})
 
 
