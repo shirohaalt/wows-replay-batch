@@ -9,7 +9,7 @@ from wows_replay_batch.runtime_layout import RUNTIME_ROOT_FILES, TOOL_FILES
 
 ROOT = Path(__file__).resolve().parent
 DEST = ROOT / "release" / f"WoWSReplayBatch-v{__version__}"
-SOURCE_FILES = ("main.py", "requirements.txt", "build_release.py", "release_package.py", "verify_results.py", "README.md", "THIRD_PARTY_NOTICES.md", "LICENSE", ".gitignore", "docs/RELEASING.md", ".github/workflows/tests.yml")
+SOURCE_FILES = ("main.py", "requirements.txt", "build_release.py", "release_package.py", "verify_results.py", "README.md", "THIRD_PARTY_NOTICES.md", "LICENSE", ".gitignore", "docs/RELEASING.md", ".github/workflows/tests.yml", ".github/workflows/live-replay-check.yml")
 
 
 def public_game_files(root):

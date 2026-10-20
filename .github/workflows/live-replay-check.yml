@@ -1,0 +1,33 @@
+name: Live replay download check
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Official tournament matches page
+        required: true
+        default: https://wows-tournaments.com/king-of-the-sea-xviii/int/matches
+      expect_archive:
+        description: Require the archived ZIP download route
+        type: boolean
+        default: true
+permissions:
+  contents: read
+jobs:
+  live-download:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python -m pip install -r requirements.txt
+      - name: Download and validate public replay samples
+        env:
+          TOURNAMENT_URL: ${{ inputs.url }}
+          EXPECT_ARCHIVE: ${{ inputs.expect_archive }}
+        shell: pwsh
+        run: |
+          $checkArgs = @('tests/live_download_check.py', '--url', $env:TOURNAMENT_URL)
+          if ($env:EXPECT_ARCHIVE -eq 'true') { $checkArgs += '--expect-archive' }
+          python @checkArgs

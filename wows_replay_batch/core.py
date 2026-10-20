@@ -145,6 +145,8 @@ class Network:
         if self.proxy and not re.match(r"^https?://[^\s]+$", self.proxy):
             raise AppError("代理地址应为 http://127.0.0.1:端口；不需要代理时留空。")
         self.local = threading.local()
+        self.archive_lock = threading.Lock()
+        self.replay_archives = {}
 
     def check(self):
         if self.cancel.is_set():
@@ -190,7 +192,7 @@ class Network:
             except ValueError as e:
                 raise AppError(f"网站没有返回有效的 JSON：{url.split('?')[0]}") from e
 
-    def download(self, url: str, path: Path, expected_hash="", validator=None, progress=None, cache_hash=""):
+    def download(self, url: str, path: Path, expected_hash="", validator=None, progress=None, cache_hash="", headers=None, replay_job=None):
         self.check()
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_file():
@@ -210,7 +212,12 @@ class Network:
         for attempt in range(4):
             self.check()
             try:
-                with self.request("GET", url, stream=True, headers={"Accept-Encoding": "identity"}) as r, temp.open("wb") as f:
+                with ExitStack() as stack:
+                    r = stack.enter_context(self.request("GET", url, stream=True, headers={"Accept-Encoding": "identity", **(headers or {})}))
+                    if replay_job is not None:
+                        from .replay_archives import replay_response
+                        r = stack.enter_context(replay_response(self, r, replay_job))
+                    f = stack.enter_context(temp.open("wb"))
                     length = 0 if r.headers.get("Content-Encoding") else int(r.headers.get("Content-Length", 0))
                     received = 0
                     last = 0.0
@@ -750,6 +757,7 @@ class Runner:
             report(job)
             replay = self.output / job["replay"]
             self.net.download(job["download_url"], replay, validator=replay_meta,
+                              headers=self.tournament.headers, replay_job=job,
                               cache_hash=previous.get(str(job["report_id"]), {}).get("replay_sha256", ""),
                               progress=lambda received, size: report(job, received, size))
             return sha256(replay), replay_meta(replay), replay.stat().st_size
