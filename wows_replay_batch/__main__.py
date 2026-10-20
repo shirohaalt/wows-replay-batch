@@ -7,7 +7,12 @@ from .core import AppError, Cancelled, Options, Runner, write_json
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--apply-update":
+        from .install_update import helper_main
+        helper_main(sys.argv[2])
+        return
     parser = argparse.ArgumentParser(description="WoWS 队伍回放助手：按队名下载比赛回放并批量转换小地图视频")
+    parser.add_argument("--update-health", help=argparse.SUPPRESS)
     parser.add_argument("--team", help="队伍名称或队标；不填写时打开桌面界面")
     parser.add_argument("--url", default=Options.url)
     parser.add_argument("--output", default="")
@@ -28,7 +33,7 @@ def main():
     args = parser.parse_args()
     if not args.team and not args.convert_only:
         from .gui import run_gui
-        run_gui()
+        run_gui(update_health=args.update_health)
         return
     def emit(kind, data):
         if kind == "log":

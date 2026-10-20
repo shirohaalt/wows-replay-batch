@@ -853,6 +853,8 @@ class Application(tk.Tk):
 
 
     def close(self):
+        if self.update_window and self.update_window.winfo_exists() and self.update_window.installer:
+            return
         if self.update_window and self.update_window.winfo_exists():
             self.update_window.close()
         if self.worker and self.worker.is_alive():
@@ -875,11 +877,15 @@ def capacity(size):
     return f"{size / 1024 / 1024:.2f} MB" if size >= 1024 * 1024 else f"{size / 1024:.1f} KB"
 
 
-def run_gui():
+def run_gui(update_health=None):
     if os.name == "nt":
         try:
             import ctypes
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except (AttributeError, OSError):
             pass
-    Application().mainloop()
+    app = Application()
+    if update_health:
+        from .install_update import mark_healthy
+        app.after(600, lambda: mark_healthy(update_health, app.root_dir))
+    app.mainloop()

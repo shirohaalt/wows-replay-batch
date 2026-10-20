@@ -5,14 +5,10 @@ import re
 import zipfile
 from pathlib import Path
 from wows_replay_batch import __version__
+from wows_replay_batch.runtime_layout import RUNTIME_ROOT_FILES, TOOL_FILES
 
 ROOT = Path(__file__).resolve().parent
 DEST = ROOT / "release" / f"WoWSReplayBatch-v{__version__}"
-RUNTIME_ROOT_FILES = ("WoWSReplayBatch.exe", "使用说明.md", "THIRD_PARTY_NOTICES.md", "LICENSE", "docs/RELEASING.md")
-TOOL_FILES = {
-    "wows-toolkit": ("minimap_renderer_cpu.exe", "minimap_renderer.exe", "replayshark.exe", "LICENSE.txt", "version.json"),
-    "ffmpeg": ("ffmpeg.exe", "BUILD.txt", "COPYING.GPLv3", "FFmpeg-LICENSE.md", "SOURCE.txt"),
-}
 SOURCE_FILES = ("main.py", "requirements.txt", "build_release.py", "release_package.py", "verify_results.py", "README.md", "THIRD_PARTY_NOTICES.md", "LICENSE", ".gitignore", "docs/RELEASING.md", ".github/workflows/tests.yml")
 
 
