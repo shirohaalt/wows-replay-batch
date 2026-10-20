@@ -1,0 +1,4 @@
+requests>=2.32,<3
+zstandard>=0.23; python_version < "3.14"
+Pillow>=10,<13
+imageio-ffmpeg>=0.6,<1
