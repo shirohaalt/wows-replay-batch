@@ -124,7 +124,7 @@ class Tournament:
         parts = parsed.path.strip("/").split("/")
         if parsed.scheme != "https" or parsed.hostname != "wows-tournaments.com" or len(parts) < 2:
             raise AppError("请输入 https://wows-tournaments.com/赛事名/赛区/matches 格式的网址。")
-        if not re.fullmatch(r"[a-z0-9-]+", parts[0]) or parts[1].lower() not in {"apac", "eu", "na", "cis", "cn", "china", "international"}:
+        if not re.fullmatch(r"[a-z0-9-]+", parts[0]) or parts[1].lower() not in {"apac", "eu", "na", "int", "cis", "cn", "china", "international"}:
             raise AppError("赛事网址中的赛事名或赛区无效。")
         return cls(parts[0], parts[1].lower())
 

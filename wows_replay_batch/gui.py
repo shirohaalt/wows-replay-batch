@@ -11,9 +11,9 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
-from .core import AppError, Cancelled, Options, Runner, app_home, load_library, write_json
+from .core import AppError, Cancelled, Network, Options, Runner, app_home, load_library, write_json
 from .updates import DEFAULT_REPOSITORY
-from .regions import REGIONS, region_for_url
+from .regions import BUILTIN_CATALOG, REGION_NAMES, catalog_labels, fetch_catalog, saved_selection
 from .ui_theme import ACCENT, BG, FIELD, MUTED, PANEL, TEXT, configure_controls, configure_stripes, stripe_rows
 STATUS = {"pending": "等待", "downloading": "下载中", "downloaded": "已下载", "converting": "转换中",
           "completed": "已完成", "skipped": "已完成 · 跳过", "failed": "失败 · 可重试", "cancelled": "已停止"}
@@ -48,9 +48,16 @@ class Application(tk.Tk):
         if not isinstance(self.trail_selections, dict):
             self.trail_selections = {}
         self.vars = {k: (tk.BooleanVar(value=v) if isinstance(v, bool) else tk.StringVar(value=v)) for k, v in defaults.items()}
-        self.region = tk.StringVar(value=region_for_url(self.vars["url"].get()))
-        self.vars["url"].set(REGIONS[self.region.get()])
-        self.region.trace_add("write", lambda *_: self.vars["url"].set(REGIONS[self.region.get()]))
+        self.catalog, selected, region = saved_selection(BUILTIN_CATALOG, self.vars["url"].get())
+        self.catalog_by_label = catalog_labels(self.catalog)
+        self.tournament = tk.StringVar(value=next(label for label, item in self.catalog_by_label.items() if item.slug == selected.slug))
+        self.region = tk.StringVar(value=REGION_NAMES[region])
+        self.vars["url"].set(selected.url(region))
+        self.catalog_status = tk.StringVar(value=f"内置列表 · {len(self.catalog)} 个赛事")
+        self.catalog_worker = None
+        self.catalog_cancel = threading.Event()
+        self.pending_catalog = None
+        self.changing_source = False
         self.source = tk.StringVar(value=saved.get("conversion_source", ""))
         self.filter_text = tk.StringVar()
         self.perspective = tk.StringVar(value="全部已下载视角")
@@ -79,14 +86,16 @@ class Application(tk.Tk):
         style.configure("TCombobox", fieldbackground=FIELD, foreground=TEXT, padding=7)
         style.map("TCombobox", fieldbackground=[("readonly", FIELD)], foreground=[("readonly", TEXT)])
         self._build()
+        self.tournament.trace_add("write", lambda *_: self.choose_tournament())
+        self.region.trace_add("write", lambda *_: self.choose_region())
         self.filter_text.trace_add("write", lambda *_: self.refresh_conversion())
         self.perspective.trace_add("write", lambda *_: self.refresh_conversion())
         for key in ("team", "url"):
             self.vars[key].trace_add("write", lambda *_: self.invalidate_search())
         self.update_download_actions()
         self.protocol("WM_DELETE_WINDOW", self.close)
-        self.after(120, self.poll)
-        self.after(200, self.restore_library)
+        self.poll_id = self.after(120, self.poll)
+        self.startup_ids = (self.after(200, self.restore_library), self.after(400, self.refresh_catalog))
 
     def button(self, parent, text, command, accent=False):
         widget = ttk.Button(parent, text=text, command=command, style="Accent.TButton" if accent else "TButton")
@@ -137,25 +146,33 @@ class Application(tk.Tk):
         form = tk.Frame(page, bg=PANEL, padx=18, pady=10)
         form.grid(row=0, column=0, sticky="ew", pady=(12, 0))
         form.columnconfigure(1, weight=1)
-        self.label(form, "赛事服务器", color=MUTED).grid(row=0, column=0, sticky="w", padx=(0, 16), pady=5)
-        self.region_choice = ttk.Combobox(form, textvariable=self.region, values=tuple(REGIONS), state="readonly")
-        self.region_choice.grid(row=0, column=1, sticky="ew", pady=4)
+        self.label(form, "赛事", color=MUTED).grid(row=0, column=0, sticky="w", padx=(0, 16), pady=5)
+        self.tournament_choice = ttk.Combobox(form, textvariable=self.tournament, values=tuple(self.catalog_by_label), state="readonly")
+        self.tournament_choice.grid(row=0, column=1, sticky="ew", pady=4)
+        self.inputs.append(self.tournament_choice)
+        self.catalog_button = ttk.Button(form, text="刷新赛事", command=self.refresh_catalog)
+        self.catalog_button.grid(row=0, column=2, padx=(12, 0), sticky="ew")
+        self.inputs.append(self.catalog_button)
+        self.label(form, "赛事服务器", color=MUTED).grid(row=1, column=0, sticky="w", padx=(0, 16), pady=5)
+        entry = self.catalog_by_label[self.tournament.get()]
+        self.region_choice = ttk.Combobox(form, textvariable=self.region, values=[REGION_NAMES[code] for code in entry.regions], state="readonly")
+        self.region_choice.grid(row=1, column=1, sticky="ew", pady=4)
         self.inputs.append(self.region_choice)
-        self.label(form, "King of the Sea XIX", color=MUTED, size=9).grid(row=0, column=2, padx=(12, 0), sticky="w")
-        for r, title, key in ((1, "队伍关键词 / 队标", "team"), (2, "REP 保存位置", "output")):
+        self.label(form, textvariable=self.catalog_status, color=MUTED, size=9, wraplength=245).grid(row=1, column=2, padx=(12, 0), sticky="w")
+        for r, title, key in ((2, "队伍关键词 / 队标", "team"), (3, "REP 保存位置", "output")):
             self.label(form, title, color=MUTED).grid(row=r, column=0, sticky="w", padx=(0, 16), pady=5)
             entry = ttk.Entry(form, textvariable=self.vars[key])
             entry.grid(row=r, column=1, sticky="ew", pady=4)
             self.inputs.append(entry)
         self.team_choice = ttk.Combobox(form, textvariable=self.team_candidate, width=29, state="disabled")
-        self.team_choice.grid(row=1, column=2, padx=(12, 0), sticky="ew")
+        self.team_choice.grid(row=2, column=2, padx=(12, 0), sticky="ew")
         self.team_choice.bind("<<ComboboxSelected>>", self.choose_team)
         self.inputs.append(self.team_choice)
         browse = ttk.Button(form, text="选择文件夹", command=self.browse)
-        browse.grid(row=2, column=2, padx=(12, 0), sticky="ew")
+        browse.grid(row=3, column=2, padx=(12, 0), sticky="ew")
         self.inputs.append(browse)
         check = ttk.Checkbutton(form, text="同时下载对手视角（转换时可分别选择）", variable=self.vars["both"], style="Studio.TCheckbutton")
-        check.grid(row=3, column=1, sticky="w", pady=(3, 0))
+        check.grid(row=4, column=1, sticky="w", pady=(3, 0))
         self.inputs.append(check)
         actions = tk.Frame(page, bg=BG)
         actions.grid(row=1, column=0, sticky="ew", pady=10)
@@ -403,6 +420,71 @@ class Application(tk.Tk):
         self.stop_button.configure(state="normal" if active else "disabled")
         self.update_download_actions(active)
         self.local_page.busy(active)
+        self.update_catalog_button(active)
+
+    def choose_tournament(self):
+        if self.changing_source or self.tournament.get() not in self.catalog_by_label:
+            return
+        entry = self.catalog_by_label[self.tournament.get()]
+        preferred = next((code for code, name in REGION_NAMES.items() if name == self.region.get()), "apac")
+        self.changing_source = True
+        try:
+            self.region_choice.configure(values=[REGION_NAMES[code] for code in entry.regions])
+            self.region.set(REGION_NAMES[entry.choose_region(preferred)])
+        finally:
+            self.changing_source = False
+        self.choose_region()
+
+    def choose_region(self):
+        if self.changing_source:
+            return
+        entry = self.catalog_by_label.get(self.tournament.get())
+        code = next((code for code, name in REGION_NAMES.items() if name == self.region.get()), None)
+        if entry and code in entry.regions:
+            url = entry.url(code)
+            if self.vars["url"].get() != url:
+                self.vars["url"].set(url)
+
+    def update_catalog_button(self, active=None):
+        if active is None:
+            active = bool(self.worker and self.worker.is_alive())
+        loading = bool(self.catalog_worker and self.catalog_worker.is_alive())
+        self.catalog_button.configure(text="刷新中…" if loading else "刷新赛事", state="disabled" if active or loading else "normal")
+
+    def refresh_catalog(self):
+        if self.catalog_worker and self.catalog_worker.is_alive():
+            return
+        self.catalog_cancel = threading.Event()
+        proxy = self.vars["proxy"].get()
+        self.catalog_status.set("正在读取官网赛事…")
+        def work():
+            try:
+                entries = fetch_catalog(Network(cancel=self.catalog_cancel, proxy=proxy))
+                self.events.put(("catalog", entries))
+            except Cancelled:
+                pass
+            except Exception as error:
+                self.events.put(("catalog_error", str(error)))
+            finally:
+                self.events.put(("catalog_idle", None))
+        self.catalog_worker = threading.Thread(target=work, daemon=True)
+        self.catalog_worker.start()
+        self.update_catalog_button()
+
+    def apply_catalog(self, entries):
+        current_url = self.vars["url"].get()
+        self.catalog, selected, region = saved_selection(entries, current_url)
+        self.catalog_by_label = catalog_labels(self.catalog)
+        self.changing_source = True
+        try:
+            self.tournament_choice.configure(values=tuple(self.catalog_by_label))
+            self.tournament.set(next(label for label, item in self.catalog_by_label.items() if item.slug == selected.slug))
+            self.region_choice.configure(values=[REGION_NAMES[code] for code in selected.regions])
+            self.region.set(REGION_NAMES[region])
+        finally:
+            self.changing_source = False
+        self.choose_region()
+        self.catalog_status.set(f"官网列表 · {len(entries)} 个赛事")
 
     def launch(self, operation):
         self.save_settings()
@@ -683,6 +765,17 @@ class Application(tk.Tk):
                 self.active_phase = data
             elif kind == "local_event":
                 self.local_page.receive_event(*data)
+            elif kind == "catalog":
+                if self.worker and self.worker.is_alive():
+                    self.pending_catalog = data
+                    self.catalog_status.set("新赛事列表将在当前任务结束后应用")
+                else:
+                    self.apply_catalog(data)
+            elif kind == "catalog_error":
+                self.catalog_status.set("刷新失败，仍可使用现有赛事列表")
+                self.add_log("赛事列表刷新失败：" + data)
+            elif kind == "catalog_idle":
+                self.update_catalog_button()
             elif kind == "log":
                 self.add_log(data)
             elif kind == "team_candidates":
@@ -749,7 +842,11 @@ class Application(tk.Tk):
                         bar.stop()
                         bar.configure(mode="determinate", value=0)
                 self.busy(False)
-        self.after(120, self.poll)
+        if self.pending_catalog is not None and not (self.worker and self.worker.is_alive()):
+            entries, self.pending_catalog = self.pending_catalog, None
+            self.apply_catalog(entries)
+        self.update_catalog_button()
+        self.poll_id = self.after(120, self.poll)
 
     def _style(self):
         s = ttk.Style(self)
@@ -855,6 +952,7 @@ class Application(tk.Tk):
     def close(self):
         if self.update_window and self.update_window.winfo_exists() and self.update_window.installer:
             return
+        self.catalog_cancel.set()
         if self.update_window and self.update_window.winfo_exists():
             self.update_window.close()
         if self.worker and self.worker.is_alive():
@@ -863,6 +961,17 @@ class Application(tk.Tk):
             self.after(250, self._close_when_idle)
         else:
             self.destroy()
+
+    def destroy(self):
+        if hasattr(self, "catalog_cancel"):
+            self.catalog_cancel.set()
+        for identifier in (getattr(self, "poll_id", None), *getattr(self, "startup_ids", ())):
+            if identifier:
+                try:
+                    self.after_cancel(identifier)
+                except tk.TclError:
+                    pass
+        super().destroy()
 
 
     def _close_when_idle(self):
